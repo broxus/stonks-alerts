@@ -18,7 +18,7 @@ const BOT_NAME: &str = "FreeTON Alerts";
 #[command(rename = "lowercase", description = "These commands are supported:")]
 enum Command {
     #[command(description = "display this text")]
-    Help,
+    Start,
     #[command(description = "subscribe to account", parse_with = "split")]
     Subscribe {
         direction: Direction,
@@ -66,7 +66,7 @@ async fn run() -> anyhow::Result<()> {
             let chat_id = cx.update.chat_id();
 
             match command {
-                Command::Help => {
+                Command::Start => {
                     cx.answer(Command::descriptions()).send().await?;
                 }
                 Command::Subscribe { direction, address } => {
