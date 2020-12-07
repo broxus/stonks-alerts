@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate anyhow;
+
 mod listener;
 mod settings;
 mod state;

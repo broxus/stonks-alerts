@@ -61,7 +61,7 @@ impl State {
     }
 
     pub fn insert(&self, addr: &str, direction: Direction, chat_id: i64) -> Result<()> {
-        let mut key = vec![0; 41]; // 32 bytes address, 8 bytes chat id
+        let mut key = vec![0; 41]; // 32 bytes address, 8 bytes chat id, 1 byte workchain
         let mut workchain = 0;
         parse_address(addr, &mut workchain, &mut key[0..32])?;
 
@@ -91,13 +91,12 @@ impl State {
         };
 
         key[40] = workchain as u8;
-        key.rotate_right(9);
+        key.rotate_right(9); // shift elements, so key will be [chat id (8 bytes), workchain (1 byte), addr]
 
         self.address_by_chat
             .update_and_fetch(&key, |old| match old {
                 Some([value]) => Some(vec![value | direction.as_byte()]),
-                Some(_) => unreachable!(),
-                None => Some(vec![direction.as_byte()]),
+                _ => Some(vec![direction.as_byte()]),
             })?;
 
         Ok(())
@@ -134,7 +133,7 @@ impl State {
         };
 
         key[40] = workchain as u8;
-        key.rotate_right(9);
+        key.rotate_right(9); // shift elements, so key will be [chat id (8 bytes), workchain (1 byte), addr]
 
         let value = self
             .address_by_chat
@@ -218,7 +217,7 @@ impl FromStr for Direction {
             "all" => Ok(Direction::All),
             "incoming" => Ok(Direction::Incoming),
             "outgoing" => Ok(Direction::Outgoing),
-            _ => Err(anyhow::Error::msg("invalid direction name")),
+            _ => Err(anyhow!("invalid direction name")),
         }
     }
 }
@@ -237,7 +236,7 @@ fn parse_address(addr: &str, workchain: &mut i8, key: &mut [u8]) -> Result<()> {
     match addr.len() {
         66 | 67 => parse_raw_address(addr, workchain, key),
         48 => parse_packed_address(addr, workchain, key),
-        _ => Err(anyhow::Error::msg("invalid address")),
+        _ => Err(anyhow!("invalid address")),
     }
 }
 
@@ -246,13 +245,13 @@ fn parse_raw_address(addr: &str, workchain: &mut i8, key: &mut [u8]) -> Result<(
 
     *workchain = parts
         .next()
-        .ok_or_else(|| anyhow::Error::msg("failed to parse workchain"))
+        .ok_or_else(|| anyhow!("failed to parse workchain"))
         .and_then(|workchain| i8::from_str(workchain).map_err(anyhow::Error::from))
         .and_then(validate_workchain)?;
 
     let address = parts
         .next()
-        .ok_or_else(|| anyhow::Error::msg("failed to parse hash"))?;
+        .ok_or_else(|| anyhow!("failed to parse hash"))?;
 
     hex::decode_to_slice(address, key)?;
 
@@ -262,7 +261,7 @@ fn parse_raw_address(addr: &str, workchain: &mut i8, key: &mut [u8]) -> Result<(
 fn parse_packed_address(addr: &str, workchain: &mut i8, key: &mut [u8]) -> Result<()> {
     let bytes = base64::decode(addr)?;
     if bytes.len() != 36 {
-        return Err(anyhow::Error::msg("invalid packed address length"));
+        return Err(anyhow!("invalid packed address length"));
     }
 
     *workchain = validate_workchain(bytes[1] as i8)?;
@@ -274,6 +273,6 @@ fn parse_packed_address(addr: &str, workchain: &mut i8, key: &mut [u8]) -> Resul
 fn validate_workchain(workchain: i8) -> Result<i8> {
     match workchain {
         MASTERCHAIN | BASECHAIN => Ok(workchain),
-        _ => Err(anyhow::Error::msg("invalid address workchain")),
+        _ => Err(anyhow!("invalid address workchain")),
     }
 }
