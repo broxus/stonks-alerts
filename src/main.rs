@@ -15,8 +15,6 @@ use teloxide::utils::command::BotCommand;
 use crate::listener::*;
 use crate::state::*;
 
-const BOT_NAME: &str = "FreeTON Alerts";
-
 #[derive(BotCommand)]
 #[command(rename = "lowercase", description = "These commands are supported:")]
 enum Command {
@@ -58,21 +56,31 @@ async fn run() -> anyhow::Result<()> {
     let settings = Settings::new()?;
 
     let bot = Bot::builder().token(settings.telegram.token).build();
+    let me = bot.get_me().send().await?;
+    let bot_name = me.user.username.ok_or_else(|| anyhow!("i'm not a bot"))?;
+
     let state = Arc::new(State::new(settings.db)?);
 
     spawn_listener(settings.kafka, bot.clone(), state.clone())?;
 
-    teloxide::commands_repl(bot, BOT_NAME, move |cx, command| {
+    teloxide::repl(bot, move |cx| {
         let state = state.clone();
+        let bot_name = bot_name.clone();
 
         async move {
             let chat_id = cx.update.chat_id();
+            let text = match cx.update.text() {
+                Some(text) => text,
+                None => return Ok(()),
+            };
 
-            match command {
-                Command::Start => {
+            log::info!("text: {}", text);
+
+            match Command::parse(text, &bot_name) {
+                Ok(Command::Start) => {
                     cx.answer(Command::descriptions()).send().await?;
                 }
-                Command::Subscribe { direction, address } => {
+                Ok(Command::Subscribe { direction, address }) => {
                     match state.insert(&address, direction, chat_id) {
                         Ok(_) => {
                             cx.reply_to(format!("Subscribed to:\n`{}`", address))
@@ -88,7 +96,7 @@ async fn run() -> anyhow::Result<()> {
                         }
                     }
                 }
-                Command::Unsubscribe { direction, address } => {
+                Ok(Command::Unsubscribe { direction, address }) => {
                     match state.remove(&address, direction, chat_id) {
                         Ok(_) => {
                             cx.reply_to(format!("Unsubscribed from:\n`{}`", address))
@@ -104,13 +112,20 @@ async fn run() -> anyhow::Result<()> {
                         }
                     }
                 }
-                Command::List => {
+                Ok(Command::List) => {
                     let mut response = "Subscriptions:".to_owned();
                     for (workchain, addr, direction) in state.subscriptions(chat_id) {
                         response +=
                             &format!("\n`{}:{} - {}`", workchain, hex::encode(&addr), direction);
                     }
 
+                    cx.reply_to(response)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .send()
+                        .await?;
+                }
+                Err(e) => {
+                    let mut response = e.to_string();
                     cx.reply_to(response)
                         .parse_mode(ParseMode::MarkdownV2)
                         .send()
