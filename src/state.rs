@@ -8,6 +8,7 @@ use crate::settings;
 
 pub struct State {
     address_by_chat: Tree,
+    address_comments: Tree,
     masterchain_incoming: Tree,
     masterchain_outgoing: Tree,
     basechain_incoming: Tree,
@@ -15,6 +16,7 @@ pub struct State {
 }
 
 const ADDRESS_BY_CHAT_PREFIX: u8 = 250u8;
+const ADDRESS_COMMENTS_PREFIX: u8 = 249u8;
 const MASTERCHAIN: i8 = -1;
 const BASECHAIN: i8 = 0;
 
@@ -22,6 +24,7 @@ impl State {
     pub fn new(settings: settings::Db) -> Result<Self> {
         let db = sled::open(settings.path)?;
         let address_by_chat = db.open_tree(&[ADDRESS_BY_CHAT_PREFIX])?;
+        let address_comments = db.open_tree(&[ADDRESS_COMMENTS_PREFIX])?;
         let masterchain_incoming = db.open_tree(&[MASTERCHAIN as u8, 0])?;
         let masterchain_outgoing = db.open_tree(&[MASTERCHAIN as u8, 1])?;
         let basechain_incoming = db.open_tree(&[BASECHAIN as u8, 0])?;
@@ -29,11 +32,53 @@ impl State {
 
         Ok(Self {
             address_by_chat,
+            address_comments,
             masterchain_incoming,
             masterchain_outgoing,
             basechain_incoming,
             basechain_outgoing,
         })
+    }
+
+    pub fn get_comment(&self, chat_id: i64, workchain: i8, addr: &[u8]) -> Result<Option<String>> {
+        let mut key = [0; 41]; // 8 bytes chat id, 1 byte workchain, 32 bytes address
+        key[0..8].copy_from_slice(&chat_id.to_be_bytes());
+        key[8] = workchain as u8;
+        key[9..41].copy_from_slice(addr);
+
+        match self.address_comments.get(key)? {
+            Some(comment) => {
+                let comment = String::from_utf8(comment.to_vec())?;
+                Ok(Some(comment))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_comment(&self, chat_id: i64, addr: &str, comment: &str) -> Result<()> {
+        let mut key = [0; 41]; // 8 bytes chat id, 1 byte workchain, 32 bytes address
+        key[0..8].copy_from_slice(&chat_id.to_be_bytes());
+
+        let mut workchain = 0;
+        parse_address(addr, &mut workchain, &mut key[9..41])?;
+        key[8] = workchain as u8;
+
+        self.address_comments.insert(key, comment.as_bytes())?;
+
+        Ok(())
+    }
+
+    pub fn remove_comment(&self, chat_id: i64, addr: &str) -> Result<()> {
+        let mut key = [0; 41]; // 8 bytes chat id, 1 byte workchain, 32 bytes address
+        key[0..8].copy_from_slice(&chat_id.to_be_bytes());
+
+        let mut workchain = 0;
+        parse_address(addr, &mut workchain, &mut key[9..41])?;
+        key[8] = workchain as u8;
+
+        self.address_comments.remove(key)?;
+
+        Ok(())
     }
 
     pub fn subscriptions(&self, chat_id: i64) -> impl Iterator<Item = (i8, Vec<u8>, Direction)> {
@@ -61,7 +106,7 @@ impl State {
     }
 
     pub fn insert(&self, addr: &str, direction: Direction, chat_id: i64) -> Result<()> {
-        let mut key = vec![0; 41]; // 32 bytes address, 8 bytes chat id, 1 byte workchain
+        let mut key = [0; 41]; // 32 bytes address, 8 bytes chat id, 1 byte workchain
         let mut workchain = 0;
         parse_address(addr, &mut workchain, &mut key[0..32])?;
 
@@ -103,7 +148,7 @@ impl State {
     }
 
     pub fn remove(&self, addr: &str, direction: Direction, chat_id: i64) -> Result<()> {
-        let mut key = vec![0; 41]; // 32 bytes address, 8 bytes chat id, 1 byte workchain
+        let mut key = [0; 41]; // 32 bytes address, 8 bytes chat id, 1 byte workchain
         let mut workchain = 0;
         parse_address(addr, &mut workchain, &mut key[0..32])?;
 

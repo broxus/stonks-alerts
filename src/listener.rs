@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use chrono::NaiveDateTime;
+use either::Either;
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::Consumer;
 use rdkafka::{ClientConfig, Message};
@@ -137,8 +139,13 @@ async fn process_message(
         ..
     } = &message.info
     {
+        let time = NaiveDateTime::from_timestamp(transaction.now, 0)
+            .format("%Y\\-%m\\-%d %H:%M:%S UTC")
+            .to_string();
+
         let bounced = transaction.description.aborted && *bounce;
         let text = TransferResponse {
+            time,
             direction,
             bounced,
             src,
@@ -148,26 +155,45 @@ async fn process_message(
 
         let markup = transaction.make_reply_markup();
 
-        match direction {
+        let src_addr = hex::decode(&src.address).unwrap();
+        let dest_addr = hex::decode(&dest.address).unwrap();
+
+        let chat_ids = match direction {
             TransferDirection::Incoming => {
-                let addr = hex::decode(&dest.address).unwrap();
-                for chat_id in state.subscribers_incoming(dest.workchain, &addr) {
-                    send_message(bot, chat_id, text, &markup).await;
-                }
+                Either::Left(state.subscribers_incoming(dest.workchain, &dest_addr))
             }
             TransferDirection::Outgoing => {
-                let addr = hex::decode(&src.address).unwrap();
-                for chat_id in state.subscribers_outgoing(src.workchain, &addr) {
-                    send_message(bot, chat_id, text, &markup).await;
-                }
+                Either::Right(state.subscribers_outgoing(src.workchain, &src_addr))
             }
+        };
+
+        for chat_id in chat_ids {
+            let src_comment = state
+                .get_comment(chat_id, src.workchain, &src_addr)
+                .ok()
+                .flatten();
+            let dest_comment = state
+                .get_comment(chat_id, dest.workchain, &dest_addr)
+                .ok()
+                .flatten();
+
+            send_message(
+                bot,
+                chat_id,
+                text.with_comments(src_comment, dest_comment),
+                &markup,
+            )
+            .await;
         }
     }
 
     Ok(())
 }
 
-async fn send_message(bot: &Bot, chat_id: i64, text: TransferResponse<'_>, markup: &ReplyMarkup) {
+async fn send_message<T>(bot: &Bot, chat_id: i64, text: T, markup: &ReplyMarkup)
+where
+    T: Into<String>,
+{
     if let Err(e) = bot
         .send_message(chat_id, text)
         .reply_markup(markup.clone())
@@ -182,6 +208,7 @@ async fn send_message(bot: &Bot, chat_id: i64, text: TransferResponse<'_>, marku
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Transaction {
+    now: i64,
     workchain: i8,
     account: String,
     hash: String,
@@ -234,8 +261,52 @@ struct TransactionActionPhase {
     success: bool,
 }
 
-#[derive(Copy, Clone)]
+struct TransferResponseWithComments<'a, 'r> {
+    info: &'a TransferResponse<'r>,
+    src_comment: Option<String>,
+    dest_comment: Option<String>,
+}
+
+impl<'a, 'r> std::fmt::Display for TransferResponseWithComments<'a, 'r> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.info.direction {
+            TransferDirection::Incoming if self.info.bounced => {
+                f.write_str("❌ Incoming transfer (bounced!)\\. ")?
+            }
+            TransferDirection::Incoming => f.write_str("📨 Incoming transfer\\. ")?,
+            TransferDirection::Outgoing => f.write_str("💸 Outgoing transfer\\. ")?,
+        };
+
+        f.write_str(&self.info.time)?;
+
+        match &self.src_comment {
+            Some(comment) => f.write_fmt(format_args!(
+                "\n\nFrom \\({}\\):\n{}",
+                comment, self.info.src
+            ))?,
+            None => f.write_fmt(format_args!("\n\nFrom:\n{}", self.info.src))?,
+        }
+
+        match &self.dest_comment {
+            Some(comment) => f.write_fmt(format_args!(
+                "\n\nTo \\({}\\):\n{}",
+                comment, self.info.dest
+            ))?,
+            None => f.write_fmt(format_args!("\n\nTo:\n{}", self.info.dest))?,
+        }
+
+        Tons(*self.info.value).fmt(f)
+    }
+}
+
+impl<'a, 'r> From<TransferResponseWithComments<'a, 'r>> for String {
+    fn from(r: TransferResponseWithComments<'a, 'r>) -> Self {
+        r.to_string()
+    }
+}
+
 struct TransferResponse<'a> {
+    time: String,
     direction: TransferDirection,
     bounced: bool,
     src: &'a MessageAddress,
@@ -243,25 +314,17 @@ struct TransferResponse<'a> {
     value: &'a u64,
 }
 
-impl<'a> std::fmt::Display for TransferResponse<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.direction {
-            TransferDirection::Incoming if self.bounced => {
-                f.write_str("❌ Incoming transfer (bounced!)")?
-            }
-            TransferDirection::Incoming => f.write_str("📨 Incoming transfer")?,
-            TransferDirection::Outgoing => f.write_str("💸 Outgoing transfer")?,
-        };
-
-        f.write_fmt(format_args!("\n\nFrom:\n{}", self.src))?;
-        f.write_fmt(format_args!("\n\nTo:\n{}", self.dest))?;
-        Tons(*self.value).fmt(f)
-    }
-}
-
-impl<'a> From<TransferResponse<'a>> for String {
-    fn from(r: TransferResponse<'a>) -> Self {
-        r.to_string()
+impl<'a> TransferResponse<'a> {
+    fn with_comments(
+        &self,
+        src_comment: Option<String>,
+        dest_comment: Option<String>,
+    ) -> TransferResponseWithComments {
+        TransferResponseWithComments {
+            info: self,
+            src_comment,
+            dest_comment,
+        }
     }
 }
 

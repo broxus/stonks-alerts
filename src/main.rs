@@ -46,6 +46,67 @@ fn parse_subscription(input: String) -> Result<(Subscription,), ParseError> {
     }
 }
 
+struct SetComment {
+    address: String,
+    comment: String,
+}
+
+const ESCAPED_CHARACTERS: [char; 18] = [
+    '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!',
+];
+
+const ESCAPED_CHARACTERS_REPLACEMENT: [&str; 18] = [
+    "\\_", "\\*", "\\[", "\\]", "\\(", "\\)", "\\~", "\\`", "\\>", "\\#", "\\+", "\\-", "\\=",
+    "\\|", "\\{", "\\}", "\\.", "\\!",
+];
+
+fn parse_set_comment(input: String) -> Result<(SetComment,), ParseError> {
+    fn escape_markdown(text: &str) -> String {
+        let mut text = text.to_string();
+        for (character, replacement) in ESCAPED_CHARACTERS
+            .iter()
+            .zip(ESCAPED_CHARACTERS_REPLACEMENT.iter())
+        {
+            text = text.replace(*character, replacement);
+        }
+        text
+    }
+
+    let description = "Usage:\n    `/setcomment ADDRESS COMMENT`\n\nWhere:\n    `ADDRESS` \\- raw or packed address\n    `COMMENT` \\- some notes, 40 characters max";
+
+    let input = input.trim();
+    match input.find(' ') {
+        Some(space_pos) => {
+            let (address, comment) = input.split_at(space_pos);
+
+            let comment = {
+                let trimmed_comment = comment.trim();
+                if trimmed_comment.len() > 40 {
+                    escape_markdown(&trimmed_comment[0..40]) + "\\.\\.\\."
+                } else {
+                    escape_markdown(trimmed_comment)
+                }
+            };
+
+            Ok((SetComment {
+                address: address.to_string(),
+                comment,
+            },))
+        }
+        None => Err(ParseError::Custom(description.into())),
+    }
+}
+
+struct ClearComment {
+    address: String,
+}
+
+fn parse_clear_comment(input: String) -> Result<(ClearComment,), ParseError> {
+    Ok((ClearComment {
+        address: input.trim().to_string(),
+    },))
+}
+
 #[derive(BotCommand)]
 #[command(rename = "lowercase", description = "These commands are supported:")]
 enum Command {
@@ -61,6 +122,13 @@ enum Command {
         parse_with = "parse_subscription"
     )]
     Unsubscribe(Subscription),
+    #[command(description = "set address comment", parse_with = "parse_set_comment")]
+    SetComment(SetComment),
+    #[command(
+        description = "clear address comment",
+        parse_with = "parse_clear_comment"
+    )]
+    ClearComment(ClearComment),
     #[command(description = "List subscriptions")]
     List,
 }
@@ -136,6 +204,32 @@ async fn run() -> anyhow::Result<()> {
                         Err(e) => {
                             log::error!("failed to unsubscribe: {:?}", e);
                             cx.reply_to("Unable to unsubscribe from this address")
+                                .send()
+                                .await?;
+                        }
+                    }
+                }
+                Ok(Command::SetComment(data)) => {
+                    match state.set_comment(chat_id, &data.address, &data.comment) {
+                        Ok(_) => {
+                            cx.reply_to("Done").send().await?;
+                        }
+                        Err(e) => {
+                            log::error!("failed to set comment: {:?}", e);
+                            cx.reply_to("Failed to set comment for this address")
+                                .send()
+                                .await?;
+                        }
+                    }
+                }
+                Ok(Command::ClearComment(data)) => {
+                    match state.remove_comment(chat_id, &data.address) {
+                        Ok(_) => {
+                            cx.reply_to("Done").send().await?;
+                        }
+                        Err(e) => {
+                            log::error!("failed to clear comment: {:?}", e);
+                            cx.reply_to("Failed to clear comment for this address")
                                 .send()
                                 .await?;
                         }
