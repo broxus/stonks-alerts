@@ -276,6 +276,38 @@ pub struct SubscriptionFilter {
     pub lt: Option<u64>,
 }
 
+impl std::fmt::Display for SubscriptionFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.gt, self.lt) {
+            (Some(gt), None) => f.write_fmt(format_args!("\\>\\= {}", Tons(gt))),
+            (None, Some(lt)) => f.write_fmt(format_args!("\\<\\= {}", Tons(lt))),
+            (Some(gt), Some(lt)) => {
+                f.write_fmt(format_args!("\\>\\= {} and \\<\\= {}", Tons(gt), Tons(lt)))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+pub struct Tons(pub u64);
+
+impl std::fmt::Display for Tons {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let int = self.0 / 1000000000;
+        let frac = self.0 % 1000000000;
+
+        if frac == 0 {
+            f.write_fmt(format_args!("{}", int))
+        } else {
+            f.write_fmt(format_args!(
+                "{}\\.{}",
+                int,
+                format!("{:09}", frac).trim_end_matches('0')
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Direction {
     All,

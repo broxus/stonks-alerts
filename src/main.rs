@@ -271,15 +271,32 @@ async fn run() -> anyhow::Result<()> {
                 }
                 Ok(Command::List) => {
                     let mut response = "Subscriptions:".to_owned();
-                    for (workchain, addr, direction, _) in state.subscriptions(chat_id) {
-                        response +=
-                            &format!("\n`{}:{} - {}`", workchain, hex::encode(&addr), direction);
+                    for (i, (workchain, addr, direction, filter)) in
+                        state.subscriptions(chat_id).enumerate()
+                    {
+                        let comment = state
+                            .get_comment(chat_id, workchain, &addr)
+                            .unwrap_or_default()
+                            .unwrap_or_else(|| format!("{}\\. Unknown", i));
+
+                        response += &format!(
+                            "\n\n{} \\- {} {}\n`{}:{}`",
+                            comment,
+                            direction,
+                            filter,
+                            workchain,
+                            hex::encode(&addr),
+                        );
                     }
 
-                    cx.reply_to(response)
+                    if let Err(e) = cx
+                        .reply_to(response)
                         .parse_mode(ParseMode::MarkdownV2)
                         .send()
-                        .await?;
+                        .await
+                    {
+                        log::error!("{}", e);
+                    }
                 }
                 Err(e) => {
                     cx.reply_to(e.to_string())

@@ -301,6 +301,7 @@ impl<'a, 'r> std::fmt::Display for TransferResponseWithComments<'a, 'r> {
             None => f.write_fmt(format_args!("\n\nTo:\n{}", self.info.dest))?,
         }
 
+        f.write_str("\n\n💎 ")?;
         Tons(*self.info.value).fmt(f)
     }
 }
@@ -349,24 +350,5 @@ struct MessageAddress {
 impl std::fmt::Display for MessageAddress {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("`{}:{}`", self.workchain, self.address))
-    }
-}
-
-struct Tons(u64);
-
-impl std::fmt::Display for Tons {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let int = self.0 / 1000000000;
-        let frac = self.0 % 1000000000;
-
-        if frac == 0 {
-            f.write_fmt(format_args!("\n\n💎 {}", int))
-        } else {
-            f.write_fmt(format_args!(
-                "\n\n💎 {}\\.{}",
-                int,
-                format!("{:09}", frac).trim_end_matches('0')
-            ))
-        }
     }
 }
