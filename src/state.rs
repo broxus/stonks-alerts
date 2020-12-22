@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use either::Either;
+use serde::{Deserialize, Serialize};
 use sled::Tree;
 
 use crate::settings;
@@ -81,7 +82,10 @@ impl State {
         Ok(())
     }
 
-    pub fn subscriptions(&self, chat_id: i64) -> impl Iterator<Item = (i8, Vec<u8>, Direction)> {
+    pub fn subscriptions(
+        &self,
+        chat_id: i64,
+    ) -> impl Iterator<Item = (i8, Vec<u8>, Direction, SubscriptionFilter)> {
         let masterchain_subscriptions =
             iter_subscriptions(&self.address_by_chat, chat_id, MASTERCHAIN);
         let basechain_subscriptions = iter_subscriptions(&self.address_by_chat, chat_id, BASECHAIN);
@@ -89,7 +93,11 @@ impl State {
         masterchain_subscriptions.chain(basechain_subscriptions)
     }
 
-    pub fn subscribers_incoming(&self, workchain: i8, addr: &[u8]) -> impl Iterator<Item = i64> {
+    pub fn subscribers_incoming(
+        &self,
+        workchain: i8,
+        addr: &[u8],
+    ) -> impl Iterator<Item = (i64, SubscriptionFilter)> {
         match workchain {
             MASTERCHAIN => Either::Left(iter_chats(&self.masterchain_incoming, addr)),
             BASECHAIN => Either::Right(iter_chats(&self.basechain_incoming, addr)),
@@ -97,7 +105,11 @@ impl State {
         }
     }
 
-    pub fn subscribers_outgoing(&self, workchain: i8, addr: &[u8]) -> impl Iterator<Item = i64> {
+    pub fn subscribers_outgoing(
+        &self,
+        workchain: i8,
+        addr: &[u8],
+    ) -> impl Iterator<Item = (i64, SubscriptionFilter)> {
         match workchain {
             MASTERCHAIN => Either::Left(iter_chats(&self.masterchain_outgoing, addr)),
             BASECHAIN => Either::Right(iter_chats(&self.basechain_outgoing, addr)),
@@ -105,7 +117,13 @@ impl State {
         }
     }
 
-    pub fn insert(&self, addr: &str, direction: Direction, chat_id: i64) -> Result<()> {
+    pub fn insert(
+        &self,
+        addr: &str,
+        direction: Direction,
+        filter: SubscriptionFilter,
+        chat_id: i64,
+    ) -> Result<()> {
         let mut key = [0; 41]; // 32 bytes address, 8 bytes chat id, 1 byte workchain
         let mut workchain = 0;
         parse_address(addr, &mut workchain, &mut key[0..32])?;
@@ -115,21 +133,27 @@ impl State {
         let with_incoming = direction == Direction::All || direction == Direction::Incoming;
         let with_outgoing = direction == Direction::All || direction == Direction::Outgoing;
 
+        let filter = bincode::serialize(&filter).unwrap();
+
         match workchain {
             MASTERCHAIN => {
                 if with_incoming {
-                    self.masterchain_incoming.insert(&key[0..40], &[])?;
+                    self.masterchain_incoming
+                        .insert(&key[0..40], filter.clone())?;
                 }
                 if with_outgoing {
-                    self.masterchain_outgoing.insert(&key[0..40], &[])?;
+                    self.masterchain_outgoing
+                        .insert(&key[0..40], filter.clone())?;
                 }
             }
             BASECHAIN => {
                 if with_incoming {
-                    self.basechain_incoming.insert(&key[0..40], &[])?;
+                    self.basechain_incoming
+                        .insert(&key[0..40], filter.clone())?;
                 }
                 if with_outgoing {
-                    self.basechain_outgoing.insert(&key[0..40], &[])?;
+                    self.basechain_outgoing
+                        .insert(&key[0..40], filter.clone())?;
                 }
             }
             _ => {}
@@ -138,10 +162,17 @@ impl State {
         key[40] = workchain as u8;
         key.rotate_right(9); // shift elements, so key will be [chat id (8 bytes), workchain (1 byte), addr]
 
+        let mut value = Vec::with_capacity(filter.len() + 1);
+        value.push(direction.as_byte());
+        value.extend(filter.into_iter());
+
         self.address_by_chat
             .update_and_fetch(&key, |old| match old {
-                Some([value]) => Some(vec![value | direction.as_byte()]),
-                _ => Some(vec![direction.as_byte()]),
+                Some(old_value) if !old_value.is_empty() => {
+                    value[0] |= old_value[0];
+                    Some(value.clone())
+                }
+                _ => Some(value.clone()),
             })?;
 
         Ok(())
@@ -183,7 +214,11 @@ impl State {
         let value = self
             .address_by_chat
             .update_and_fetch(&key, |old| match old {
-                Some([old]) => Some(vec![old & !direction.as_byte()]),
+                Some(old_value) if !old_value.is_empty() => {
+                    let mut new_value = Vec::from(old_value);
+                    new_value[0] &= !direction.as_byte();
+                    Some(new_value)
+                }
                 _ => None,
             })?;
 
@@ -199,34 +234,46 @@ fn iter_subscriptions(
     db: &Tree,
     chat_id: i64,
     workchain: i8,
-) -> impl Iterator<Item = (i8, Vec<u8>, Direction)> {
+) -> impl Iterator<Item = (i8, Vec<u8>, Direction, SubscriptionFilter)> {
     let mut prefix = [0; 9];
     prefix[0..8].copy_from_slice(&chat_id.to_le_bytes());
     prefix[8] = workchain as u8;
 
     db.scan_prefix(&prefix).filter_map(|item| {
         item.ok().and_then(|(key, value)| {
-            if key.len() != 41 || value.len() != 1 {
+            if key.len() != 41 || value.is_empty() {
                 return None;
             }
             let direction = Direction::from_byte(value[0]);
 
+            let filter = bincode::deserialize(&value[1..]).unwrap_or_default();
+
             let workchain = key[8] as i8;
             let addr = key[9..].to_vec();
 
-            Some((workchain, addr, direction))
+            Some((workchain, addr, direction, filter))
         })
     })
 }
 
-fn iter_chats(db: &Tree, prefix: &[u8]) -> impl Iterator<Item = i64> {
-    db.scan_prefix(prefix).keys().filter_map(|item| {
-        item.ok().map(|key| {
+fn iter_chats(db: &Tree, prefix: &[u8]) -> impl Iterator<Item = (i64, SubscriptionFilter)> {
+    db.scan_prefix(prefix).filter_map(|item| {
+        item.ok().map(|(key, value)| {
             let mut bytes = [0; 8];
             bytes.copy_from_slice(&key[32..40]);
-            i64::from_le_bytes(bytes)
+
+            let chat_id = i64::from_le_bytes(bytes);
+            let filter = bincode::deserialize(&value).unwrap_or_default();
+
+            (chat_id, filter)
         })
     })
+}
+
+#[derive(Debug, Copy, Clone, Default, Deserialize, Serialize)]
+pub struct SubscriptionFilter {
+    pub gt: Option<u64>,
+    pub lt: Option<u64>,
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]

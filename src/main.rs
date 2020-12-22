@@ -16,9 +16,36 @@ use teloxide::utils::command::{BotCommand, ParseError};
 use crate::listener::*;
 use crate::state::*;
 
+fn parse_filter<'a, I>(mut tokens: I) -> Result<SubscriptionFilter, ParseError>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let value_token = match tokens.next() {
+        Some(token) if token == ">" || token == ">=" => tokens.next(),
+        Some(_) => {
+            return Err(ParseError::Custom(
+                format!("unsupported filter, possible patterns are: `> AMOUNT`").into(),
+            ))
+        }
+        None => return Ok(SubscriptionFilter::default()),
+    };
+
+    match value_token {
+        Some(token) => match f64::from_str(token) {
+            Ok(gt) => Ok(SubscriptionFilter {
+                gt: Some((gt * 1000000000.0) as u64),
+                ..Default::default()
+            }),
+            Err(e) => Err(ParseError::Custom(e.to_string().into())),
+        },
+        None => Ok(SubscriptionFilter::default()),
+    }
+}
+
 struct Subscription {
     direction: Direction,
     address: String,
+    filter: SubscriptionFilter,
 }
 
 fn parse_subscription(input: String) -> Result<(Subscription,), ParseError> {
@@ -32,6 +59,7 @@ fn parse_subscription(input: String) -> Result<(Subscription,), ParseError> {
                 Ok(direction) => Ok((Subscription {
                     direction,
                     address: second.to_string(),
+                    filter: parse_filter(parts)?,
                 },)),
                 Err(e) => Err(ParseError::IncorrectFormat(
                     format!("{}\n\n{}", e.to_string(), description).into(),
@@ -40,6 +68,7 @@ fn parse_subscription(input: String) -> Result<(Subscription,), ParseError> {
             None => Ok((Subscription {
                 direction: Direction::All,
                 address: first.to_owned(),
+                filter: Default::default(),
             },)),
         },
         None => Err(ParseError::Custom(description.to_owned().into())),
@@ -178,7 +207,12 @@ async fn run() -> anyhow::Result<()> {
                     cx.answer(Command::descriptions()).send().await?;
                 }
                 Ok(Command::Subscribe(subscription)) => {
-                    match state.insert(&subscription.address, subscription.direction, chat_id) {
+                    match state.insert(
+                        &subscription.address,
+                        subscription.direction,
+                        subscription.filter,
+                        chat_id,
+                    ) {
                         Ok(_) => {
                             cx.reply_to(format!("Subscribed to:\n`{}`", subscription.address))
                                 .parse_mode(ParseMode::MarkdownV2)
@@ -237,7 +271,7 @@ async fn run() -> anyhow::Result<()> {
                 }
                 Ok(Command::List) => {
                     let mut response = "Subscriptions:".to_owned();
-                    for (workchain, addr, direction) in state.subscriptions(chat_id) {
+                    for (workchain, addr, direction, _) in state.subscriptions(chat_id) {
                         response +=
                             &format!("\n`{}:{} - {}`", workchain, hex::encode(&addr), direction);
                     }

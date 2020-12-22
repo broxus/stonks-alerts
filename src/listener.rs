@@ -167,7 +167,13 @@ async fn process_message(
             }
         };
 
-        for chat_id in chat_ids {
+        for (chat_id, filter) in chat_ids {
+            if matches!(filter.gt, Some(ref gt) if value < gt)
+                || matches!(filter.lt, Some(ref lt) if value > lt)
+            {
+                continue;
+            }
+
             let src_comment = state
                 .get_comment(chat_id, src.workchain, &src_addr)
                 .ok()
