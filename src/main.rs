@@ -202,6 +202,11 @@ async fn run() -> anyhow::Result<()> {
                 None => return Ok(()),
             };
 
+            if let Some(_) = cx.update.forward_from() {
+                // don't react to replies
+                return Ok(());
+            }
+
             match Command::parse(text, &bot_name) {
                 Ok(Command::Start) => {
                     cx.answer(Command::descriptions()).send().await?;
