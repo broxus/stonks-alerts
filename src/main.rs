@@ -202,8 +202,8 @@ async fn run() -> anyhow::Result<()> {
                 None => return Ok(()),
             };
 
-            if let Some(_) = cx.update.forward_from() {
-                // don't react to replies
+            if cx.update.forward_from().is_some() || cx.update.reply_to_message().is_some() {
+                // don't react to forwards or replies
                 return Ok(());
             }
 
