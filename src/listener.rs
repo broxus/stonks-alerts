@@ -6,12 +6,11 @@ use either::Either;
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::Consumer;
 use rdkafka::{ClientConfig, Message};
-use serde::export::Formatter;
 use serde::Deserialize;
-use teloxide::prelude::Request;
+use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, ReplyMarkup};
 use teloxide::Bot;
-use tokio::stream::StreamExt;
+use tokio_stream::StreamExt;
 
 use crate::settings;
 use crate::state::*;
@@ -32,18 +31,19 @@ pub fn spawn_listener(settings: settings::Kafka, bot: Bot, state: Arc<State>) ->
 
     let consumers = (0..settings.partition_count).map(|partition| {
         let mut assignment = rdkafka::TopicPartitionList::new();
-        assignment.add_partition_offset(
-            &settings.transactions_topic,
-            partition as i32,
-            rdkafka::Offset::End,
-        );
-
-        let consumer: StreamConsumer = client_config.create().unwrap_or_else(|e| {
-            panic!(
-                "Consumer creation failed for partition {} - {}",
-                partition, e
+        let consumer: StreamConsumer = assignment
+            .add_partition_offset(
+                &settings.transactions_topic,
+                partition as i32,
+                rdkafka::Offset::End,
             )
-        });
+            .and_then(|_| client_config.create())
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Consumer creation failed for partition {} - {}",
+                    partition, e
+                )
+            });
 
         consumer.assign(&assignment).unwrap();
         consumer
@@ -58,7 +58,7 @@ pub fn spawn_listener(settings: settings::Kafka, bot: Bot, state: Arc<State>) ->
 
 async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) {
     loop {
-        let mut messages = consumer.start();
+        let mut messages = consumer.stream();
         log::debug!("Started consumer {:?}", consumer.assignment());
 
         while let Some(message) = messages.next().await {
@@ -81,7 +81,7 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
                         Some(msg) => {
                             if let Err(e) = process_message(
                                 &transaction,
-                                &msg,
+                                msg,
                                 &bot,
                                 state.as_ref(),
                                 TransferDirection::Incoming,
@@ -97,7 +97,7 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
                     for msg in &transaction.messages_out {
                         if let Err(e) = process_message(
                             &transaction,
-                            &msg,
+                            msg,
                             &bot,
                             state.as_ref(),
                             TransferDirection::Outgoing,
@@ -225,10 +225,10 @@ struct Transaction {
 
 impl Transaction {
     fn make_reply_markup(&self) -> ReplyMarkup {
-        ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup::default().append_row(vec![
+        ReplyMarkup::InlineKeyboard(InlineKeyboardMarkup::default().append_row(vec![
             InlineKeyboardButton::url(
                 "View in explorer".to_owned(),
-                format!("https://ton-explorer.com/transactions/{}", self.hash),
+                format!("https://tonscan.io/transactions/{}", self.hash),
             ),
         ]))
     }
@@ -274,7 +274,7 @@ struct TransferResponseWithComments<'a, 'r> {
 }
 
 impl<'a, 'r> std::fmt::Display for TransferResponseWithComments<'a, 'r> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.info.direction {
             TransferDirection::Incoming if self.info.bounced => {
                 f.write_str("❌ Incoming transfer (bounced!)\\. ")?
@@ -348,7 +348,11 @@ struct MessageAddress {
 }
 
 impl std::fmt::Display for MessageAddress {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("`{}:{}`", self.workchain, self.address))
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "`{}:{}`",
+            self.workchain,
+            self.address.to_lowercase()
+        ))
     }
 }

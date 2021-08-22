@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use settings::Settings;
 use teloxide::prelude::*;
+use teloxide::requests::ResponseResult;
 use teloxide::types::ParseMode;
 use teloxide::utils::command::{BotCommand, ParseError};
 
@@ -24,7 +25,7 @@ where
         Some(token) if token == ">" || token == ">=" => tokens.next(),
         Some(_) => {
             return Err(ParseError::Custom(
-                format!("unsupported filter, possible patterns are: `> AMOUNT`").into(),
+                "unsupported filter, possible patterns are: `> AMOUNT`".into(),
             ))
         }
         None => return Ok(SubscriptionFilter::default()),
@@ -183,7 +184,7 @@ fn init_logger() {
 async fn run() -> anyhow::Result<()> {
     let settings = Settings::new()?;
 
-    let bot = Bot::builder().token(settings.telegram.token).build();
+    let bot = Bot::new(settings.telegram.token);
     let me = bot.get_me().send().await?;
     let bot_name = me.user.username.ok_or_else(|| anyhow!("i'm not a bot"))?;
 
