@@ -11,6 +11,8 @@ use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, ReplyMarkup};
 use teloxide::Bot;
 use tokio_stream::StreamExt;
+use ton_block::Deserializable;
+use ton_block_compressor::ZstdWrapper;
 
 use crate::settings;
 use crate::state::*;
@@ -57,6 +59,7 @@ pub fn spawn_listener(settings: settings::Kafka, bot: Bot, state: Arc<State>) ->
 }
 
 async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) {
+    let mut zstd = ZstdWrapper::new();
     loop {
         let mut messages = consumer.stream();
         log::debug!("Started consumer {:?}", consumer.assignment());
@@ -64,13 +67,14 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
         while let Some(message) = messages.next().await {
             match message {
                 Ok(message) => {
-                    let payload = match message.payload() {
-                        Some(data) => data,
-                        None => continue,
+                    let payload = match message.payload().map(|data| zstd.decompress(data)) {
+                        Some(Ok(data)) => data,
+                        _ => continue,
                     };
 
-                    let transaction = match serde_json::from_slice::<Transaction>(payload) {
-                        Ok(transaction) => transaction,
+                    let transaction = match parse_transaction(payload) {
+                        Ok(Some(tx)) => tx,
+                        Ok(None) => continue,
                         Err(e) => {
                             log::error!("failed to parse transaction: {:?}", e);
                             continue;
@@ -122,6 +126,65 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
 
         log::debug!("Done {:?}", consumer.assignment());
     }
+}
+
+fn parse_transaction(payload: &[u8]) -> Result<Option<Transaction>> {
+    fn convert_address(address: &ton_block::MsgAddressInt) -> MessageAddress {
+        MessageAddress {
+            workchain: address.workchain_id() as i8,
+            address: hex::encode(address.address().get_bytestring(0)),
+        }
+    }
+
+    fn convert_message(msg: ton_block::Message) -> Result<Option<TransactionMessage>> {
+        Ok(Some(TransactionMessage {
+            info: match msg.header() {
+                ton_block::CommonMsgInfo::ExtInMsgInfo(_) => TransactionMessageInfo::ExternalIn,
+                ton_block::CommonMsgInfo::IntMsgInfo(info) => TransactionMessageInfo::Internal {
+                    src: match &info.src {
+                        ton_block::MsgAddressIntOrNone::Some(addr) => convert_address(addr),
+                        ton_block::MsgAddressIntOrNone::None => return Ok(None),
+                    },
+                    dest: convert_address(&info.dst),
+                    bounce: info.bounce,
+                    value: info.value.grams.0 as u64,
+                },
+                ton_block::CommonMsgInfo::ExtOutMsgInfo(_) => TransactionMessageInfo::ExternalOut,
+            },
+        }))
+    }
+
+    let cell = ton_types::deserialize_tree_of_cells(&mut std::io::Cursor::new(payload))?;
+    let hash = cell.repr_hash();
+    let tx = ton_block::Transaction::construct_from(&mut cell.into())?;
+
+    let in_msg = match tx.in_msg {
+        Some(msg) => msg.read_struct()?,
+        None => return Ok(None),
+    };
+
+    let description = match tx.description.read_struct()? {
+        ton_block::TransactionDescr::Ordinary(descr) => TransactionDescription {
+            aborted: descr.aborted,
+        },
+        _ => return Ok(None),
+    };
+
+    let mut messages_out = Vec::with_capacity(tx.outmsg_cnt as usize);
+    tx.out_msgs.iterate(|item| {
+        if let Some(msg) = convert_message(item.0)? {
+            messages_out.push(msg);
+        }
+        Ok(true)
+    })?;
+
+    Ok(Some(Transaction {
+        now: tx.now as i64,
+        hash: hash.to_hex_string(),
+        description,
+        message_in: convert_message(in_msg)?,
+        messages_out,
+    }))
 }
 
 async fn process_message(
@@ -215,8 +278,6 @@ where
 #[serde(rename_all = "camelCase")]
 struct Transaction {
     now: i64,
-    workchain: i8,
-    account: String,
     hash: String,
     description: TransactionDescription,
     message_in: Option<TransactionMessage>,
@@ -242,14 +303,11 @@ struct TransactionMessage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 enum TransactionMessageInfo {
-    ExternalIn {
-        dest: MessageAddress,
-    },
+    ExternalIn,
     Internal {
         src: MessageAddress,
         dest: MessageAddress,
         bounce: bool,
-        bounced: bool,
         value: u64,
     },
     ExternalOut,
@@ -258,13 +316,6 @@ enum TransactionMessageInfo {
 #[derive(Debug, Clone, Deserialize)]
 struct TransactionDescription {
     aborted: bool,
-    destroyed: bool,
-    action: Option<TransactionActionPhase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct TransactionActionPhase {
-    success: bool,
 }
 
 struct TransferResponseWithComments<'a, 'r> {
