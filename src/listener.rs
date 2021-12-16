@@ -67,6 +67,14 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
         while let Some(message) = messages.next().await {
             match message {
                 Ok(message) => {
+                    let commit = |message| {
+                        if let Err(e) =
+                            consumer.commit_message(message, rdkafka::consumer::CommitMode::Async)
+                        {
+                            log::error!("Failed to commit message: {:?}", e);
+                        }
+                    };
+
                     let payload = match message.payload().map(|data| zstd.decompress(data)) {
                         Some(Ok(data)) => data,
                         _ => continue,
@@ -74,29 +82,29 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
 
                     let transaction = match parse_transaction(payload) {
                         Ok(Some(tx)) => tx,
-                        Ok(None) => continue,
+                        Ok(None) => {
+                            commit(&message);
+                            continue;
+                        }
                         Err(e) => {
                             log::error!("failed to parse transaction: {:?}", e);
                             continue;
                         }
                     };
 
-                    match &transaction.message_in {
-                        Some(msg) => {
-                            if let Err(e) = process_message(
-                                &transaction,
-                                msg,
-                                &bot,
-                                state.as_ref(),
-                                TransferDirection::Incoming,
-                            )
-                            .await
-                            {
-                                log::debug!("error processing incoming message: {:?}", e);
-                            }
+                    if let Some(msg) = &transaction.message_in {
+                        if let Err(e) = process_message(
+                            &transaction,
+                            msg,
+                            &bot,
+                            state.as_ref(),
+                            TransferDirection::Incoming,
+                        )
+                        .await
+                        {
+                            log::debug!("error processing incoming message: {:?}", e);
                         }
-                        _ => continue,
-                    };
+                    }
 
                     for msg in &transaction.messages_out {
                         if let Err(e) = process_message(
@@ -112,11 +120,7 @@ async fn listen_consumer(consumer: StreamConsumer, bot: Bot, state: Arc<State>) 
                         }
                     }
 
-                    if let Err(e) =
-                        consumer.commit_message(&message, rdkafka::consumer::CommitMode::Async)
-                    {
-                        log::error!("Failed to commit message: {:?}", e);
-                    }
+                    commit(&message);
                 }
                 Err(err) => {
                     log::error!("Kafka error: {:?}", err);
