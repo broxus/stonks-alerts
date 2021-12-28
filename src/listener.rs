@@ -330,6 +330,8 @@ struct TransferResponseWithComments<'a, 'r> {
 
 impl<'a, 'r> std::fmt::Display for TransferResponseWithComments<'a, 'r> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const TONSCAN_ACCOUNTS: &'static str = "https://tonscan.io/accounts";
+
         match self.info.direction {
             TransferDirection::Incoming if self.info.bounced => {
                 f.write_str("❌ Incoming transfer (bounced!)\\. ")?
@@ -338,26 +340,32 @@ impl<'a, 'r> std::fmt::Display for TransferResponseWithComments<'a, 'r> {
             TransferDirection::Outgoing => f.write_str("💸 Outgoing transfer\\. ")?,
         };
 
-        f.write_str(&self.info.time)?;
+        f.write_fmt(format_args!("*{}*", self.info.time))?;
 
         match &self.src_comment {
             Some(comment) => f.write_fmt(format_args!(
-                "\n\nFrom \\({}\\):\n{}",
-                comment, self.info.src
+                "\n\nFrom \\({}\\):   *[\\[open\\]]({}/{})*\n`{}`",
+                comment, TONSCAN_ACCOUNTS, self.info.src, self.info.src
             ))?,
-            None => f.write_fmt(format_args!("\n\nFrom:\n{}", self.info.src))?,
+            None => f.write_fmt(format_args!(
+                "\n\nFrom:   *[\\[open\\]]({}/{})*\n`{}`",
+                TONSCAN_ACCOUNTS, self.info.src, self.info.src
+            ))?,
         }
 
         match &self.dest_comment {
             Some(comment) => f.write_fmt(format_args!(
-                "\n\nTo \\({}\\):\n{}",
-                comment, self.info.dest
+                "\n\nTo \\({}\\):   *[\\[open\\]]({}/{})*\n`{}`",
+                comment, TONSCAN_ACCOUNTS, self.info.dest, self.info.dest
             ))?,
-            None => f.write_fmt(format_args!("\n\nTo:\n{}", self.info.dest))?,
+            None => f.write_fmt(format_args!(
+                "\n\nTo:   *[\\[open\\]]({}/{})*\n`{}`",
+                TONSCAN_ACCOUNTS, self.info.dest, self.info.dest
+            ))?,
         }
 
-        f.write_str("\n\n💎 ")?;
-        Tons(*self.info.value).fmt(f)
+        f.write_str("\n\n💠 ")?;
+        Evers(*self.info.value).fmt(f)
     }
 }
 
@@ -405,7 +413,7 @@ struct MessageAddress {
 impl std::fmt::Display for MessageAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
-            "`{}:{}`",
+            "{}:{}",
             self.workchain,
             self.address.to_lowercase()
         ))

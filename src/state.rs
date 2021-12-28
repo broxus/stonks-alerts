@@ -279,19 +279,21 @@ pub struct SubscriptionFilter {
 impl std::fmt::Display for SubscriptionFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self.gt, self.lt) {
-            (Some(gt), None) => f.write_fmt(format_args!("\\>\\= {}", Tons(gt))),
-            (None, Some(lt)) => f.write_fmt(format_args!("\\<\\= {}", Tons(lt))),
-            (Some(gt), Some(lt)) => {
-                f.write_fmt(format_args!("\\>\\= {} and \\<\\= {}", Tons(gt), Tons(lt)))
-            }
+            (Some(gt), None) => f.write_fmt(format_args!("\\>\\= {}", Evers(gt))),
+            (None, Some(lt)) => f.write_fmt(format_args!("\\<\\= {}", Evers(lt))),
+            (Some(gt), Some(lt)) => f.write_fmt(format_args!(
+                "\\>\\= {} and \\<\\= {}",
+                Evers(gt),
+                Evers(lt)
+            )),
             _ => Ok(()),
         }
     }
 }
 
-pub struct Tons(pub u64);
+pub struct Evers(pub u64);
 
-impl std::fmt::Display for Tons {
+impl std::fmt::Display for Evers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let int = self.0 / 1000000000;
         let frac = self.0 % 1000000000;
