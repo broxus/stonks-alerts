@@ -295,18 +295,20 @@ pub struct Evers(pub u64);
 
 impl std::fmt::Display for Evers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use num_format::ToFormattedString;
+
         let int = self.0 / 1000000000;
         let frac = self.0 % 1000000000;
 
-        if frac == 0 {
-            f.write_fmt(format_args!("{}", int))
-        } else {
+        int.read_to_fmt_writer(&mut *f, &num_format::Locale::fr)?;
+        if frac > 0 {
             f.write_fmt(format_args!(
-                "{}\\.{}",
-                int,
+                "\\.{}",
                 format!("{:09}", frac).trim_end_matches('0')
-            ))
+            ))?;
         }
+
+        Ok(())
     }
 }
 

@@ -22,6 +22,7 @@ sled = "0.34"
 teloxide = { version = "0.5", features = ["macros"] }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
+num-format = "0.4"
 
 ton-block-compressor = { git = "https://github.com/broxus/ton-block-compressor" }
 

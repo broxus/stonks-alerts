@@ -330,7 +330,7 @@ struct TransferResponseWithComments<'a, 'r> {
 
 impl<'a, 'r> std::fmt::Display for TransferResponseWithComments<'a, 'r> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        const TONSCAN_ACCOUNTS: &'static str = "https://tonscan.io/accounts";
+        const TONSCAN_ACCOUNTS: &str = "https://tonscan.io/accounts";
 
         match self.info.direction {
             TransferDirection::Incoming if self.info.bounced => {
