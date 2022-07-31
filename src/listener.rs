@@ -271,6 +271,7 @@ where
         .send_message(chat_id, text)
         .reply_markup(markup.clone())
         .parse_mode(ParseMode::MarkdownV2)
+        .disable_web_page_preview(true)
         .send()
         .await
     {
